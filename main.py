@@ -4,15 +4,14 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine
 from models import Base, VisitDB
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import date
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-
-class Visit(BaseModel):
+class VisitCreate(BaseModel):
     visit_date: date = Field(
         ...,
         example="2026-05-27",
@@ -53,16 +52,27 @@ class Visit(BaseModel):
     )
 
 class VisitUpdate(BaseModel):
-    doctor: str | None = Field(
-    default=None,
-    example="Кардиолог",
-    description="Специализация врача"
-    )
-    
-    notes: str | None = Field(
-        default=None,
-        example="Повторный прием перенесли на неделю - 2026-07-03"
-    )
+    visit_date: date | None = None
+    doctor: str | None = None
+    clinic: str | None = None
+    reason: str | None = None
+    treatment: str | None = None
+    next_visit: str | None = None
+
+class VisitResponse(BaseModel):
+    id: int
+    visit_date: date
+    doctor: str
+    clinic: str
+    reason: str
+    treatment: str
+    next_visit: str | None = None
+
+    class Config:
+        from_attributes = True
+
+class ErrorResponse(BaseModel):
+    detail: str
 
 @app.get("/")
 def root():
@@ -76,13 +86,14 @@ def health():
 
 @app.post(
         "/visits",
+        response_model=VisitResponse,
         tags=["Visits"],
         summary="Создание медицинского визита",
         description="Создает новую запись о посещении врача",
         response_description="Создание новой записи о визите",
         status_code=201
 )
-def create_visit(visit: Visit):
+def create_visit(visit: VisitCreate):
     db: Session = SessionLocal()
 
     db_visit = VisitDB(
@@ -98,22 +109,11 @@ def create_visit(visit: Visit):
     db.commit()
     db.refresh(db_visit)
 
-    return {
-    "message": "Медицинский визит успешно создан",
-    "visit": {
-        "date": db_visit.visit_date,
-        "id": db_visit.id,
-        "doctor": db_visit.doctor,
-        "clinic": db_visit.clinic,
-        "reason": db_visit.reason,
-        "treatment": db_visit.treatment,
-        "next_visit": db_visit.next_visit
-    }
-}
-
+    return db_visit
 
 @app.get(
         "/visits",
+        response_model=list[VisitResponse],
         tags=["Visits"],
         summary="Получения всего списка записей",
         description="Получения списка всех посещений к врачам",
@@ -127,6 +127,10 @@ def get_visits():
 
 @app.get(
     "/visits/{visit_id}",
+    response_model=VisitResponse,
+    responses={
+        404: {"model": ErrorResponse}
+    },
     tags=["Visits"],
     summary="Получение конкретного визита",
     description="Получение информации о посещении врача по ID",
@@ -151,6 +155,10 @@ def get_visit(visit_id: int):
 
 @app.patch(
     "/visits/{visit_id}",
+    response_model=VisitResponse,
+    responses={
+        404: {"model": ErrorResponse}
+    },
     tags=["Visits"],
     summary="Обновление медицинского визита",
     description="Частичное обновление информации о визите",
@@ -168,7 +176,7 @@ def update_visit(visit_id: int, updated_data: VisitUpdate):
                 detail=f"Визит с ID {visit_id} не найден"
             )
 
-        update_data = updated_data.dict(exclude_unset=True)
+        update_data = updated_data.model_dump(exclude_unset=True)
 
         for key, value in update_data.items():
             setattr(visit, key, value)
@@ -183,6 +191,10 @@ def update_visit(visit_id: int, updated_data: VisitUpdate):
 
 @app.delete(
     "/visits/{visit_id}",
+    status_code=204,
+    responses={
+        404: {"model": ErrorResponse}
+    },
     tags=["Visits"],
     summary="Удаление медицинского визита",
     description="Удаляет запись о посещении врача по ID",
@@ -194,9 +206,10 @@ def delete_visit(visit_id: int):
     visit = db.query(VisitDB).filter(VisitDB.id == visit_id).first()
 
     if not visit:
-        return {
-            "error": f"Визит с ID {visit_id} не найден"
-        }
+        raise HTTPException(
+            status_code=404,
+            detail=f"Визит с ID {visit_id} не найден"
+    )
 
     db.delete(visit)
     db.commit()
